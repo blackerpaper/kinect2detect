@@ -8,6 +8,7 @@
 #include <strsafe.h>
 #include "resource.h"
 #include "DepthBasics.h"
+#include <algorithm>
 
 /// <summary>
 /// Entry point for the application
@@ -46,7 +47,9 @@ CDepthBasics::CDepthBasics() :
     m_pDepthFrameReader(NULL),
     m_pD2DFactory(NULL),
     m_pDrawDepth(NULL),
-    m_pDepthRGBX(NULL)
+    m_pDepthRGBX(NULL),
+	m_pLastBuffer(NULL),
+	m_pDetection(NULL)
 {
     LARGE_INTEGER qpf = {0};
     if (QueryPerformanceFrequency(&qpf))
@@ -212,7 +215,107 @@ void CDepthBasics::Update()
 
         if (SUCCEEDED(hr))
         {
-            ProcessDepth(nTime, pBuffer, nWidth, nHeight, nDepthMinReliableDistance, nDepthMaxDistance);
+			int nLength = nWidth * nHeight;
+
+			if (m_pLastBuffer == NULL) {
+				m_pLastBuffer = new UINT16[nLength]();
+			}
+
+			if (m_pDetection == NULL) {
+				m_pDetection = new bool[nLength]();
+			}
+
+			UINT16* save = pBuffer;
+			const UINT16* pBufferEnd = pBuffer + (nLength);
+			UINT16* pLastBuffer = m_pLastBuffer;
+			bool* pDetection = m_pDetection;
+
+			while (pBuffer < pBufferEnd)
+			{
+				USHORT depth = *pBuffer;
+				USHORT lastDepth = *pLastBuffer;
+
+				if ((nDepthMinReliableDistance <= depth     && depth     <= nDepthMaxDistance) &&
+					(nDepthMinReliableDistance <= lastDepth && lastDepth <= nDepthMaxDistance)) {
+					
+					if (abs(depth-lastDepth) > 15) {
+						*pDetection = true;
+					}
+				}
+
+				++pBuffer;
+				++pLastBuffer;
+				++pDetection;
+			}
+			
+			//remove noise
+			pDetection = m_pDetection;
+			const bool* pDetectionEnd = pDetection + (nLength);
+			bool* pStart = NULL;
+			while ( pDetection < pDetectionEnd) {
+				if (*pDetection) {
+					if (pStart == NULL) {
+						pStart = pDetection;
+					}
+				}
+				else {
+					if (pStart != NULL) {
+						unsigned long diff = pDetection - pStart;
+						if (diff < 15) {
+							for (int i = 0; i < diff; i++) {
+								*(pStart + i) = false;
+							}
+						}
+						pStart = NULL;
+					}
+				}
+
+				++pDetection;
+			}
+
+			pBuffer = save;
+
+			int avgX = 0;
+			int avgY = 0;
+			int avgZ = 0;
+			int count = 0;
+			pDetection = m_pDetection;
+			while (pDetection < pDetectionEnd) {
+				if (*pDetection) {
+					count++;
+					int index = pDetection - m_pDetection;
+					avgX += index % nWidth;
+					avgY += index / nWidth;
+					avgZ += *(pBuffer + index);
+					*pDetection = false;
+				}
+				++pDetection;
+			}
+			if (count > 100) {
+				avgX /= count;
+				avgY /= count;
+				avgZ /= count;
+			}
+
+			if (avgZ > 0) {
+				pBuffer = save;
+				pDetection = m_pDetection;
+				while (pBuffer < pBufferEnd) {
+					if (avgZ - 10 < (*pBuffer) && (*pBuffer) < avgZ + 10) {
+						*pDetection = true;
+					}
+
+					++pDetection;
+					++pBuffer;
+				}
+			}
+
+			pBuffer = save;
+
+			ProcessDepth(nTime, pBuffer, nWidth, nHeight, nDepthMinReliableDistance, nDepthMaxDistance);
+
+			std::copy(pBuffer, pBuffer + nLength, m_pLastBuffer);
+			std::fill_n(m_pDetection, nLength, 0);
         }
 
         SafeRelease(pFrameDescription);
@@ -405,11 +508,13 @@ void CDepthBasics::ProcessDepth(INT64 nTime, const UINT16* pBuffer, int nWidth, 
         // end pixel is start + width*height - 1
         const UINT16* pBufferEnd = pBuffer + (nWidth * nHeight);
 
-        while (pBuffer < pBufferEnd)
+		bool* pDetection = m_pDetection;
+
+		while (pBuffer < pBufferEnd)
         {
             USHORT depth = *pBuffer;
 
-            // To convert to a byte, we're discarding the most-significant
+			// To convert to a byte, we're discarding the most-significant
             // rather than least-significant bits.
             // We're preserving detail, although the intensity will "wrap."
             // Values outside the reliable depth range are mapped to 0 (black).
@@ -422,8 +527,15 @@ void CDepthBasics::ProcessDepth(INT64 nTime, const UINT16* pBuffer, int nWidth, 
             pRGBX->rgbGreen = intensity;
             pRGBX->rgbBlue  = intensity;
 
-            ++pRGBX;
+			if (*pDetection) {
+				pRGBX->rgbRed = 255;
+				pRGBX->rgbGreen = 0;
+				pRGBX->rgbBlue = 0;
+			}
+
+			++pRGBX;
             ++pBuffer;
+			++pDetection;
         }
 
         // Draw the data with Direct2D

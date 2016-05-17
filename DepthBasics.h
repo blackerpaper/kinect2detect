@@ -72,7 +72,10 @@ private:
     ID2D1Factory*           m_pD2DFactory;
     RGBQUAD*                m_pDepthRGBX;
 
-    /// <summary>
+	UINT16*                 m_pLastBuffer;
+	bool*                   m_pDetection;
+	
+	/// <summary>
     /// Main processing function
     /// </summary>
     void                    Update();
