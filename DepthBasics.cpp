@@ -225,92 +225,71 @@ void CDepthBasics::Update()
 				m_pDetection = new bool[nLength]();
 			}
 
-			UINT16* save = pBuffer;
-			const UINT16* pBufferEnd = pBuffer + (nLength);
-			UINT16* pLastBuffer = m_pLastBuffer;
-			bool* pDetection = m_pDetection;
-
-			while (pBuffer < pBufferEnd)
-			{
-				USHORT depth = *pBuffer;
-				USHORT lastDepth = *pLastBuffer;
-
-				if ((nDepthMinReliableDistance <= depth     && depth     <= nDepthMaxDistance) &&
-					(nDepthMinReliableDistance <= lastDepth && lastDepth <= nDepthMaxDistance)) {
-					
-					if (abs(depth-lastDepth) > 15) {
-						*pDetection = true;
-					}
+			// calculate average depth for background removal
+			int count = 0;
+			int avgDepth = 0;
+			for (int i = 0; i < nLength; i++) {
+				UINT16 val = *(pBuffer + i);
+				if (val > 0) {
+					avgDepth += val;
+					count++;
 				}
-
-				++pBuffer;
-				++pLastBuffer;
-				++pDetection;
 			}
-			
-			//remove noise
-			pDetection = m_pDetection;
-			const bool* pDetectionEnd = pDetection + (nLength);
-			bool* pStart = NULL;
-			while ( pDetection < pDetectionEnd) {
-				if (*pDetection) {
-					if (pStart == NULL) {
-						pStart = pDetection;
+			avgDepth /= count;
+
+			// background removal if depth > half avgDepth
+			for (int i = 0; i < nLength; i++) {
+				UINT16 depth = *(pBuffer + i);
+				if ( 0 < depth && depth < avgDepth * 0.9) {
+					*(m_pDetection + i) = true;
+				}
+			}
+
+			// outlining
+			int outline = 5; //pixel
+			bool start = false;
+			for (int i = 0; i < nLength; i++) {
+				if (start) {
+					if (!(*(m_pDetection + i + outline))) {
+						start = false;
+					}
+					else {
+						*(m_pDetection + i) = false;
 					}
 				}
 				else {
-					if (pStart != NULL) {
-						unsigned long diff = pDetection - pStart;
-						if (diff < 15) {
-							for (int i = 0; i < diff; i++) {
-								*(pStart + i) = false;
-							}
+					bool maybe = true;
+					for (int j = 0; j < outline; j++) {
+						if (!*(m_pDetection + i + j)) {
+							maybe = false;
+							break;
 						}
-						pStart = NULL;
+					}
+					if (maybe) {
+						start = true;
+						i += 3;
 					}
 				}
-
-				++pDetection;
 			}
 
-			pBuffer = save;
-
+			// avg outline
+			count = 0;
 			int avgX = 0;
 			int avgY = 0;
-			int avgZ = 0;
-			int count = 0;
-			pDetection = m_pDetection;
-			while (pDetection < pDetectionEnd) {
-				if (*pDetection) {
+			for (int i = 0; i < nLength; i++) {
+				if (*(m_pDetection + i)) {
 					count++;
-					int index = pDetection - m_pDetection;
-					avgX += index % nWidth;
-					avgY += index / nWidth;
-					avgZ += *(pBuffer + index);
-					*pDetection = false;
+					avgX += i % nWidth;
+					avgY += i / nWidth;
 				}
-				++pDetection;
 			}
-			if (count > 100) {
+
+			if (count > 0) {
 				avgX /= count;
 				avgY /= count;
-				avgZ /= count;
+
+				*(m_pDetection + avgY * nWidth + avgX) = true;
 			}
-
-			if (avgZ > 0) {
-				pBuffer = save;
-				pDetection = m_pDetection;
-				while (pBuffer < pBufferEnd) {
-					if (avgZ - 10 < (*pBuffer) && (*pBuffer) < avgZ + 10) {
-						*pDetection = true;
-					}
-
-					++pDetection;
-					++pBuffer;
-				}
-			}
-
-			pBuffer = save;
 
 			ProcessDepth(nTime, pBuffer, nWidth, nHeight, nDepthMinReliableDistance, nDepthMaxDistance);
 
