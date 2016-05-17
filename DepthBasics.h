@@ -8,6 +8,7 @@
 
 #include "resource.h"
 #include "ImageRenderer.h"
+#include <winsock2.h>
 
 class CDepthBasics
 {
@@ -72,8 +73,8 @@ private:
     ID2D1Factory*           m_pD2DFactory;
     RGBQUAD*                m_pDepthRGBX;
 
-	UINT16*                 m_pLastBuffer;
 	bool*                   m_pDetection;
+	SOCKET					m_hSocket;
 	
 	/// <summary>
     /// Main processing function
@@ -125,5 +126,8 @@ private:
     /// <param name="lpszFilePath">full file path to output bitmap to</param>
     /// <returns>indicates success or failure</returns>
     HRESULT                 SaveBitmapToFile(BYTE* pBitmapBits, LONG lWidth, LONG lHeight, WORD wBitsPerPixel, LPCWSTR lpszFilePath);
+
+	void initSocket();
+	void cleanSocket();
 };
 

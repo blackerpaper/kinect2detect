@@ -9,6 +9,16 @@
 #include "resource.h"
 #include "DepthBasics.h"
 #include <algorithm>
+#include <WS2tcpip.h>
+#include "json/json.h"
+#include "rapidjson\rapidjson.h"
+#include "rapidjson\document.h"
+#include "rapidjson\stringbuffer.h"
+#include "rapidjson\writer.h"
+#include <ctime>
+
+#pragma comment (lib, "Ws2_32.lib")
+#pragma comment (lib, "Mswsock.lib")
 
 /// <summary>
 /// Entry point for the application
@@ -48,8 +58,8 @@ CDepthBasics::CDepthBasics() :
     m_pD2DFactory(NULL),
     m_pDrawDepth(NULL),
     m_pDepthRGBX(NULL),
-	m_pLastBuffer(NULL),
-	m_pDetection(NULL)
+	m_pDetection(NULL),
+	m_hSocket(INVALID_SOCKET)
 {
     LARGE_INTEGER qpf = {0};
     if (QueryPerformanceFrequency(&qpf))
@@ -59,6 +69,9 @@ CDepthBasics::CDepthBasics() :
 
     // create heap storage for depth pixel data in RGBX format
     m_pDepthRGBX = new RGBQUAD[cDepthWidth * cDepthHeight];
+
+	// initialize winsock
+	initSocket();
 }
   
 
@@ -217,10 +230,6 @@ void CDepthBasics::Update()
         {
 			int nLength = nWidth * nHeight;
 
-			if (m_pLastBuffer == NULL) {
-				m_pLastBuffer = new UINT16[nLength]();
-			}
-
 			if (m_pDetection == NULL) {
 				m_pDetection = new bool[nLength]();
 			}
@@ -246,7 +255,7 @@ void CDepthBasics::Update()
 			}
 
 			// outlining
-			int outline = 5; //pixel
+			int outline = 1; //pixel
 			bool start = false;
 			for (int i = 0; i < nLength; i++) {
 				if (start) {
@@ -267,7 +276,7 @@ void CDepthBasics::Update()
 					}
 					if (maybe) {
 						start = true;
-						i += 3;
+						i += outline;
 					}
 				}
 			}
@@ -283,7 +292,6 @@ void CDepthBasics::Update()
 					avgY += i / nWidth;
 				}
 			}
-
 			if (count > 0) {
 				avgX /= count;
 				avgY /= count;
@@ -291,9 +299,59 @@ void CDepthBasics::Update()
 				*(m_pDetection + avgY * nWidth + avgX) = true;
 			}
 
+			if (m_hSocket == INVALID_SOCKET) {
+				initSocket();
+			}
+			else {
+				//rapidjson::Document fromScratch;
+				//fromScratch.SetObject();
+				//rapidjson::Document::AllocatorType& allocator = fromScratch.GetAllocator();
+
+				//rapidjson::Value coord(rapidjson::kObjectType);
+				//for (int i = 0; i < nLength; i++) {
+				//	if (*(m_pDetection + i)) {
+				//		coord.AddMember("x", i % nWidth, allocator);
+				//		coord.AddMember("y", i / nWidth, allocator);
+				//	}
+				//}
+
+				//fromScratch.AddMember("id", "kinect1", allocator);
+				//fromScratch.AddMember("timestamp", time(NULL), allocator);
+				//fromScratch.AddMember("outline", coord, allocator);
+
+				//rapidjson::StringBuffer strbuf;
+				//rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
+				//fromScratch.Accept(writer);
+
+				rapidjson::StringBuffer s;
+				rapidjson::Writer<rapidjson::StringBuffer> writer(s);
+
+				writer.StartObject();
+				writer.Key("id");
+				writer.String("kinect1");
+				writer.Key("timestamp");
+				writer.Uint(time(NULL));
+				writer.Key("outline");
+				writer.StartArray();
+				for (int i = 0; i < nLength; i++) {
+					if (*(m_pDetection + i)) {
+						writer.StartArray();
+						writer.Uint(i % nWidth);
+						writer.Uint(i / nWidth);
+						writer.EndArray();
+					}
+				}
+				writer.EndArray();
+				writer.EndObject();
+
+				const char *sendbuf = "amal";
+				if (send(m_hSocket, sendbuf, (int)strlen(sendbuf), 0) == SOCKET_ERROR) {
+					cleanSocket();
+				}
+			}
+
 			ProcessDepth(nTime, pBuffer, nWidth, nHeight, nDepthMinReliableDistance, nDepthMaxDistance);
 
-			std::copy(pBuffer, pBuffer + nLength, m_pLastBuffer);
 			std::fill_n(m_pDetection, nLength, 0);
         }
 
@@ -665,4 +723,50 @@ HRESULT CDepthBasics::SaveBitmapToFile(BYTE* pBitmapBits, LONG lWidth, LONG lHei
     // Close the file
     CloseHandle(hFile);
     return S_OK;
+}
+
+void CDepthBasics::initSocket() {
+	WSADATA wsaData;
+	WSAStartup(MAKEWORD(2, 2), &wsaData);
+
+	struct addrinfo hints;
+	ZeroMemory(&hints, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_protocol = IPPROTO_TCP;
+
+	struct addrinfo *result = NULL;
+	if (getaddrinfo("192.168.2.81", "9090", &hints, &result) != 0) {
+		goto clean;
+	}
+
+	struct addrinfo *ptr = NULL;
+	for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
+		m_hSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+		if (m_hSocket == INVALID_SOCKET) {
+			goto clean;
+		}
+
+		if (connect(m_hSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == SOCKET_ERROR) {
+			closesocket(m_hSocket);
+			m_hSocket = INVALID_SOCKET;
+			continue;
+		}
+		break;
+	}
+
+	freeaddrinfo(result);
+	return;
+
+clean:
+	WSACleanup();
+}
+
+void CDepthBasics::cleanSocket() {
+	if (m_hSocket != INVALID_SOCKET) {
+		closesocket(m_hSocket);
+		m_hSocket = INVALID_SOCKET;
+	}
+
+	WSACleanup();
 }
