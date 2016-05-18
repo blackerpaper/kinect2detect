@@ -244,12 +244,14 @@ void CDepthBasics::Update()
 					count++;
 				}
 			}
-			avgDepth /= count;
+			if (count > 0) {
+				avgDepth /= count;
+			}
 
 			// background removal if depth > half avgDepth
 			for (int i = 0; i < nLength; i++) {
 				UINT16 depth = *(pBuffer + i);
-				if ( 0 < depth && depth < avgDepth * 0.9) {
+				if ( avgDepth *0.1 < depth && depth < avgDepth * 0.7) {
 					*(m_pDetection + i) = true;
 				}
 			}
@@ -333,18 +335,14 @@ void CDepthBasics::Update()
 				writer.Uint(time(NULL));
 				writer.Key("outline");
 				writer.StartArray();
-				for (int i = 0; i < nLength; i++) {
-					if (*(m_pDetection + i)) {
-						writer.StartArray();
-						writer.Uint(i % nWidth);
-						writer.Uint(i / nWidth);
-						writer.EndArray();
-					}
-				}
+				writer.StartArray();
+				writer.Uint(avgX);
+				writer.Uint(avgY);
+				writer.EndArray();
 				writer.EndArray();
 				writer.EndObject();
 
-				const char *sendbuf = "amal";
+				const char *sendbuf = s.GetString();
 				if (send(m_hSocket, sendbuf, (int)strlen(sendbuf), 0) == SOCKET_ERROR) {
 					cleanSocket();
 				}
@@ -736,7 +734,7 @@ void CDepthBasics::initSocket() {
 	hints.ai_protocol = IPPROTO_TCP;
 
 	struct addrinfo *result = NULL;
-	if (getaddrinfo("192.168.2.81", "9090", &hints, &result) != 0) {
+	if (getaddrinfo("127.0.0.1", "9090", &hints, &result) != 0) {
 		goto clean;
 	}
 
